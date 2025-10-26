@@ -10,19 +10,12 @@ import type {
   SuccessMessage,
 } from "./types";
 import { connectionManager } from "./connection-manager";
-import { db } from "./db/client";
-import { videoStream, alert } from "./db/schema";
-import { eq, and } from "drizzle-orm";
-
-// Generate unique ID for alerts
-function generateId(prefix: string): string {
-  return `${prefix}_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`;
-}
 
 /**
  * Message Router
  * 
- * Routes incoming WebSocket messages to appropriate consumers based on message type
+ * Pure stream router - manages in-memory connections and routes messages.
+ * No database persistence - all state is in memory.
  */
 export class MessageRouter {
   /**
@@ -50,11 +43,6 @@ export class MessageRouter {
           await this.handleAlert(ws, message);
           break;
 
-        case "auth":
-          // TODO: Implement authentication
-          this.sendSuccess(ws, "Authentication successful");
-          break;
-
         default:
           this.sendError(ws, "UNKNOWN_MESSAGE_TYPE", `Unknown message type: ${(message as any).type}`);
       }
@@ -65,7 +53,8 @@ export class MessageRouter {
   }
 
   /**
-   * Handle registration from a producer (mobile streaming video)
+   * Handle registration from a mobile client (producer)
+   * Mobile clients connect via /streams/register and then send this message
    */
   private async handleRegister(
     ws: ServerWebSocket<ClientMetadata>,
@@ -80,60 +69,8 @@ export class MessageRouter {
       return;
     }
 
-    // Verify stream ownership if this is a mobile client (producer)
-    if (clientType === "mobile" && produces.includes("video-frame")) {
-      try {
-        const stream = await db
-          .select()
-          .from(videoStream)
-          .where(and(
-            eq(videoStream.id, streamId),
-            eq(videoStream.userId, existingData.userId)
-          ))
-          .limit(1);
-
-        if (stream.length === 0) {
-          this.sendError(ws, "UNAUTHORIZED", "Stream not found or you don't own this stream");
-          return;
-        }
-
-        // Update stream status to online
-        await db
-          .update(videoStream)
-          .set({ 
-            status: "online",
-            lastSeen: new Date()
-          })
-          .where(eq(videoStream.id, streamId));
-      } catch (error) {
-        console.error("[MessageRouter] Error verifying stream ownership:", error);
-        this.sendError(ws, "SERVER_ERROR", "Failed to verify stream ownership");
-        return;
-      }
-    }
-
-    // For dashboard/ML subscribing to streams, verify user owns the stream
-    if (clientType !== "ml-service" && consumes.includes("video-frame")) {
-      try {
-        const stream = await db
-          .select()
-          .from(videoStream)
-          .where(and(
-            eq(videoStream.id, streamId),
-            eq(videoStream.userId, existingData.userId)
-          ))
-          .limit(1);
-
-        if (stream.length === 0) {
-          this.sendError(ws, "UNAUTHORIZED", "Stream not found or you don't own this stream");
-          return;
-        }
-      } catch (error) {
-        console.error("[MessageRouter] Error verifying stream access:", error);
-        this.sendError(ws, "SERVER_ERROR", "Failed to verify stream access");
-        return;
-      }
-    }
+    // Generate stream ID if not provided
+    const finalStreamId = streamId || `stream_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`;
 
     // Create client metadata, preserving auth info from connection
     const metadata: ClientMetadata = {
@@ -141,7 +78,7 @@ export class MessageRouter {
       sessionId: existingData.sessionId,
       userEmail: existingData.userEmail,
       userName: existingData.userName,
-      streamId,
+      streamId: finalStreamId,
       clientType,
       produces,
       consumes,
@@ -153,42 +90,30 @@ export class MessageRouter {
 
     // Register as producer for each message type it produces
     for (const type of produces) {
-      connectionManager.registerProducer(streamId, ws, type);
+      connectionManager.registerProducer(finalStreamId, ws, type);
     }
 
     // Register as consumer for each message type it consumes
     for (const type of consumes) {
-      connectionManager.registerConsumer(streamId, ws, type);
+      connectionManager.registerConsumer(finalStreamId, ws, type);
     }
 
     console.log(
-      `[MessageRouter] Registered ${clientType} client (user: ${metadata.userEmail || metadata.userId}) for stream ${streamId} ` +
+      `[MessageRouter] Registered ${clientType} client (user: ${metadata.userEmail || metadata.userId}) for stream ${finalStreamId} ` +
       `(produces: ${produces.join(", ")}, consumes: ${consumes.join(", ")})`
     );
 
-    this.sendSuccess(ws, "Registration successful");
+    this.sendSuccess(ws, `Registration successful. Stream ID: ${finalStreamId}`);
 
-    // Broadcast status update and update DB if this is a mobile client starting to stream
+    // Broadcast status update if this is a mobile client starting to stream
     if (clientType === "mobile" && produces.includes("video-frame")) {
-      this.broadcastStatus(streamId, "streaming");
-      
-      // Update stream status to streaming
-      try {
-        await db
-          .update(videoStream)
-          .set({ 
-            status: "streaming",
-            lastSeen: new Date()
-          })
-          .where(eq(videoStream.id, streamId));
-      } catch (error) {
-        console.error("[MessageRouter] Error updating stream status:", error);
-      }
+      this.broadcastStatus(finalStreamId, "streaming");
     }
   }
 
   /**
-   * Handle subscription from a consumer (dashboard, ML service)
+   * Handle subscription from a consumer (web app, ML service)
+   * Subscribers connect via /streams/subscribe and then send this message
    */
   private async handleSubscribe(
     ws: ServerWebSocket<ClientMetadata>,
@@ -201,30 +126,6 @@ export class MessageRouter {
     if (!existingData?.userId) {
       this.sendError(ws, "AUTH_REQUIRED", "Connection not authenticated");
       return;
-    }
-
-    // For dashboard/mobile subscribing to streams, verify user owns the stream
-    // ML service is allowed to subscribe to any stream for analysis
-    if (clientType !== "ml-service") {
-      try {
-        const stream = await db
-          .select()
-          .from(videoStream)
-          .where(and(
-            eq(videoStream.id, streamId),
-            eq(videoStream.userId, existingData.userId)
-          ))
-          .limit(1);
-
-        if (stream.length === 0) {
-          this.sendError(ws, "UNAUTHORIZED", "Stream not found or you don't own this stream");
-          return;
-        }
-      } catch (error) {
-        console.error("[MessageRouter] Error verifying stream access:", error);
-        this.sendError(ws, "SERVER_ERROR", "Failed to verify stream access");
-        return;
-      }
     }
 
     // Create client metadata, preserving auth info from connection
@@ -257,9 +158,14 @@ export class MessageRouter {
   }
 
   /**
-   * Handle video frame from mobile → broadcast to dashboard and ML service
-   * Note: Video frames are broadcasted to ALL subscribers (dashboard, ML service, etc.)
-   * The ML service should maintain a persistent WebSocket connection to ensure it receives all frames.
+   * Handle video frame from mobile → broadcast to web app subscribers + forward to ML service
+   * 
+   * Flow:
+   * 1. Mobile sends video frame to us
+   * 2. We broadcast to all web app subscribers (WebSocket)
+   * 3. We forward to ML service (WE initiate connection/HTTP POST)
+   * 4. ML service analyzes and sends alerts back to us
+   * 5. We broadcast alerts to mobile + web app subscribers
    */
   private async handleVideoFrame(
     ws: ServerWebSocket<ClientMetadata>,
@@ -267,23 +173,10 @@ export class MessageRouter {
   ): Promise<void> {
     const { streamId } = message;
 
-    // Get all video consumers for this stream
+    // Get all video consumers for this stream (web app only)
     const consumers = connectionManager.getConsumers(streamId, "video-frame");
 
-    if (consumers.length === 0) {
-      console.warn(
-        `[MessageRouter] WARNING: No consumers for video stream ${streamId}. ` +
-        `ML service should be connected to analyze footage. Frame will be dropped.`
-      );
-      return;
-    }
-
-    // Separate consumers by type for logging
-    const dashboardConsumers = consumers.filter(c => c.data?.clientType === "dashboard");
-    const mlConsumers = consumers.filter(c => c.data?.clientType === "ml-service");
-    const mobileConsumers = consumers.filter(c => c.data?.clientType === "mobile");
-
-    // Broadcast to all consumers
+    // Broadcast to WebSocket subscribers (web app)
     const messageStr = JSON.stringify(message);
     let successCount = 0;
 
@@ -297,42 +190,64 @@ export class MessageRouter {
     }
 
     console.log(
-      `[MessageRouter] Broadcast video frame for stream ${streamId} to ${successCount}/${consumers.length} consumers ` +
-      `(dashboard: ${dashboardConsumers.length}, ML: ${mlConsumers.length}, mobile: ${mobileConsumers.length})`
+      `[MessageRouter] Broadcast video frame for stream ${streamId} to ${successCount} web app subscriber(s)`
     );
 
-    // Log warning if ML service is not connected
-    if (mlConsumers.length === 0) {
-      console.warn(`[MessageRouter] WARNING: No ML service connected for stream ${streamId}. Footage is not being analyzed.`);
-    }
+    // TODO: Forward to ML service (WE initiate, not ML service)
+    // The ML service does NOT connect to us - we push frames to it
+    // 
+    // Option 1: HTTP POST to ML service endpoint
+    // const mlServiceUrl = process.env.ML_SERVICE_URL;
+    // if (mlServiceUrl) {
+    //   try {
+    //     await fetch(`${mlServiceUrl}/analyze`, {
+    //       method: 'POST',
+    //       headers: { 'Content-Type': 'application/json' },
+    //       body: JSON.stringify({
+    //         streamId: message.streamId,
+    //         frame: message.data,
+    //         timestamp: message.timestamp
+    //       })
+    //     });
+    //   } catch (error) {
+    //     console.error('[MessageRouter] Failed to forward to ML service:', error);
+    //   }
+    // }
+    //
+    // Option 2: WebSocket client (we connect TO ML service)
+    // - Maintain persistent WebSocket connection to ML service
+    // - Forward frames through that connection
+    // - Receive alerts back through same connection
+    //
+    // Option 3: Message Queue (Redis/RabbitMQ)
+    // - Publish frames to queue
+    // - ML service consumes from queue
+    // - ML service publishes alerts to another queue
+    // - We consume alerts and broadcast to clients
   }
 
   /**
-   * Handle alert from ML service → broadcast to mobile and dashboard
+   * Handle alert from ML service → broadcast to mobile and web app
+   * 
+   * Note: 
+   * - ML service sends alerts back to us (via HTTP callback or WebSocket we initiated)
+   * - This handler receives those alerts and broadcasts to clients
+   * - Alert persistence is handled by another service/codebase
+   * - This server only routes alerts in real-time
+   * 
+   * TODO: Set up endpoint/mechanism for ML service to send alerts back to us
+   * Options:
+   * 1. POST /alerts endpoint - ML service POSTs alerts to us
+   * 2. WebSocket connection TO ML service - receive alerts on same connection
+   * 3. Message Queue - consume alerts from queue
    */
   private async handleAlert(
     ws: ServerWebSocket<ClientMetadata>,
     message: AlertMessage
   ): Promise<void> {
-    const { streamId, severity, message: alertMessage, metadata } = message;
+    const { streamId, severity, message: alertMessage } = message;
 
-    // Store alert in database
-    try {
-      const alertId = generateId("alert");
-      await db.insert(alert).values({
-        id: alertId,
-        streamId,
-        severity,
-        message: alertMessage,
-        metadata: metadata || null,
-      });
-      console.log(`[MessageRouter] Stored alert ${alertId} in database`);
-    } catch (error) {
-      console.error(`[MessageRouter] Failed to store alert in database:`, error);
-      // Continue with broadcast even if storage fails
-    }
-
-    // Get all alert consumers for this stream
+    // Get all alert consumers for this stream (mobile + web app)
     const consumers = connectionManager.getConsumers(streamId, "alert");
 
     if (consumers.length === 0) {
@@ -354,7 +269,7 @@ export class MessageRouter {
     }
 
     console.log(
-      `[MessageRouter] Broadcast ${severity} alert for stream ${streamId} to ${successCount}/${consumers.length} consumers: ${alertMessage}`
+      `[MessageRouter] Broadcast ${severity} alert for stream ${streamId} to ${successCount} consumer(s): ${alertMessage}`
     );
   }
 
@@ -427,23 +342,9 @@ export class MessageRouter {
         `[MessageRouter] Client disconnected: ${metadata.clientType} from stream ${metadata.streamId}`
       );
 
-      // If mobile producer disconnected, broadcast offline status and update database
+      // If mobile producer disconnected, broadcast offline status
       if (metadata.clientType === "mobile" && metadata.produces.includes("video-frame")) {
         this.broadcastStatus(metadata.streamId, "offline");
-        
-        // Update database with offline status and lastSeen
-        try {
-          await db
-            .update(videoStream)
-            .set({ 
-              status: "offline",
-              lastSeen: new Date()
-            })
-            .where(eq(videoStream.id, metadata.streamId));
-          console.log(`[MessageRouter] Updated stream ${metadata.streamId} status to offline`);
-        } catch (error) {
-          console.error(`[MessageRouter] Failed to update stream status on disconnect:`, error);
-        }
       }
     }
   }

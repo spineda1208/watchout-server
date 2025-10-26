@@ -4,9 +4,12 @@ import type { ClientMetadata, MessageType } from "./types";
 /**
  * Connection Manager
  * 
- * Tracks all active WebSocket connections and provides methods to:
- * - Register producers (mobile streaming video, ML sending alerts)
- * - Register consumers (dashboard viewing video/alerts, ML analyzing video)
+ * In-memory tracker for all active WebSocket connections.
+ * No persistence - all state is kept in memory only.
+ * 
+ * Provides methods to:
+ * - Register producers (mobile streaming video)
+ * - Register consumers (web app viewing video/alerts, ML analyzing video)
  * - Route messages to appropriate consumers
  * - Clean up on disconnect
  */

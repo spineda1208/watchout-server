@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, boolean, jsonb, integer } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, boolean } from "drizzle-orm/pg-core";
 
 export const user = pgTable("user", {
   id: text("id").primaryKey(),
@@ -58,32 +58,4 @@ export const verification = pgTable("verification", {
     .defaultNow()
     .$onUpdate(() => /* @__PURE__ */ new Date())
     .notNull(),
-});
-
-export const videoStream = pgTable("video_stream", {
-  id: text("id").primaryKey(),
-  userId: text("user_id")
-    .notNull()
-    .references(() => user.id, { onDelete: "cascade" }),
-  deviceName: text("device_name").notNull(),
-  deviceType: text("device_type").notNull(), // "mobile", "tablet", etc.
-  status: text("status").notNull().default("offline"), // "online", "offline", "streaming"
-  lastSeen: timestamp("last_seen"),
-  metadata: jsonb("metadata"), // resolution, fps, etc.
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at")
-    .defaultNow()
-    .$onUpdate(() => /* @__PURE__ */ new Date())
-    .notNull(),
-});
-
-export const alert = pgTable("alert", {
-  id: text("id").primaryKey(),
-  streamId: text("stream_id")
-    .notNull()
-    .references(() => videoStream.id, { onDelete: "cascade" }),
-  severity: text("severity").notNull(), // "low", "medium", "high", "critical"
-  message: text("message").notNull(),
-  metadata: jsonb("metadata"), // confidence, location, objectType, etc.
-  createdAt: timestamp("created_at").defaultNow().notNull(),
 });

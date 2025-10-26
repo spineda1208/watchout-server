@@ -3,7 +3,8 @@
  */
 
 // Client Types
-export type ClientType = "mobile" | "dashboard" | "ml-service";
+// Note: ML service does not connect to us - we push data to ML service
+export type ClientType = "mobile" | "dashboard";
 
 // Message Types that can be produced/consumed
 export type MessageType = "video-frame" | "alert";
@@ -48,7 +49,8 @@ export interface SubscribeMessage extends BaseMessage {
   // Authentication is handled during WebSocket upgrade
 }
 
-// Video Frame Message (from Mobile to Dashboard/ML)
+// Video Frame Message (from Mobile to Dashboard)
+// Note: Also forwarded to ML service via our outbound connection
 export interface VideoFrameMessage extends BaseMessage {
   type: "video-frame";
   streamId: string;
@@ -56,7 +58,8 @@ export interface VideoFrameMessage extends BaseMessage {
   timestamp: number;
 }
 
-// Alert Message (from ML Service to Mobile/Dashboard)
+// Alert Message (from ML Service back to us, then to Mobile/Dashboard)
+// Note: ML service sends alerts back to us, we broadcast to clients
 export interface AlertMessage extends BaseMessage {
   type: "alert";
   streamId: string;
