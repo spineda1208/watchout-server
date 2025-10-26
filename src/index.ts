@@ -25,40 +25,20 @@ const server = Bun.serve<ClientMetadata>({
 
     // /streams/register - Mobile client WebSocket connection
     if (url.pathname === "/streams/register") {
-      // Extract and verify authentication token
-      const token = extractTokenFromRequest(req);
-      
-      if (!token) {
-        console.log("[Register] Connection rejected: No authentication token");
-        return new Response("Authentication required", { status: 401 });
-      }
-
-      // Verify the session
-      const session = await verifySessionToken(token);
-      
-      if (!session) {
-        console.log("[Register] Connection rejected: Invalid or expired token");
-        return new Response("Invalid or expired authentication token", { status: 401 });
-      }
-
-      console.log(`[Register] Mobile client authenticated: ${session.user.email || session.userId}`);
-
-      // Upgrade to WebSocket
+      // Allow unauthenticated connection - auth happens via first message
       const upgraded = server.upgrade(req, {
         data: {
-          userId: session.userId,
-          sessionId: session.sessionId,
-          userEmail: session.user.email,
-          userName: session.user.name,
           streamId: "", // Will be set during registration message
           clientType: "mobile" as const,
           produces: [],
           consumes: [],
           connectedAt: new Date(),
+          authenticated: false, // Not authenticated yet
         } as ClientMetadata,
       });
 
       if (upgraded) {
+        console.log("[Register] Mobile client connected - awaiting authentication");
         return undefined; // Return undefined when upgrade is successful
       }
       return new Response("WebSocket upgrade failed", { status: 400 });
@@ -66,40 +46,20 @@ const server = Bun.serve<ClientMetadata>({
 
     // /streams/subscribe - Web app subscriber WebSocket connection
     if (url.pathname === "/streams/subscribe") {
-      // Extract and verify authentication token
-      const token = extractTokenFromRequest(req);
-      
-      if (!token) {
-        console.log("[Subscribe] Connection rejected: No authentication token");
-        return new Response("Authentication required", { status: 401 });
-      }
-
-      // Verify the session
-      const session = await verifySessionToken(token);
-      
-      if (!session) {
-        console.log("[Subscribe] Connection rejected: Invalid or expired token");
-        return new Response("Invalid or expired authentication token", { status: 401 });
-      }
-
-      console.log(`[Subscribe] Web app subscriber authenticated: ${session.user.email || session.userId}`);
-
-      // Upgrade to WebSocket
+      // Allow unauthenticated connection - auth happens via first message
       const upgraded = server.upgrade(req, {
         data: {
-          userId: session.userId,
-          sessionId: session.sessionId,
-          userEmail: session.user.email,
-          userName: session.user.name,
           streamId: "", // Will be set during subscription message
           clientType: "dashboard" as const,
           produces: [],
           consumes: [],
           connectedAt: new Date(),
+          authenticated: false, // Not authenticated yet
         } as ClientMetadata,
       });
 
       if (upgraded) {
+        console.log("[Subscribe] Web app subscriber connected - awaiting authentication");
         return undefined;
       }
       return new Response("WebSocket upgrade failed", { status: 400 });

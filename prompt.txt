@@ -1,0 +1,176 @@
+I need you to implement a WebSocket client that connects to my secure video streaming API.
+
+## API Overview
+
+This is a WebSocket-based video streaming server that uses an initial-message authentication pattern. The server routes video frames from mobile devices to dashboards and ML services, and routes security alerts back to mobile devices and dashboards.
+
+## Authentication Flow
+
+**CRITICAL**: The server uses a secure authentication pattern:
+1. Connect to WebSocket endpoint (no token in URL)
+2. Immediately send an authentication message with session token
+3. Wait for success response
+4. Then proceed with registration and operations
+
+## WebSocket Endpoints
+
+- **Mobile producers**: `ws://localhost:3000/streams/register`
+- **Dashboard/ML consumers**: `ws://localhost:3000/streams/subscribe`
+
+## Message Protocol
+
+All messages are JSON with this format:
+
+### 1. Authentication (REQUIRED FIRST)
+```json
+{
+  "type": "auth",
+  "token": "YOUR_SESSION_TOKEN_HERE"
+}
+```
+
+**Server Response on Success:**
+```json
+{
+  "type": "success",
+  "message": "Authentication successful",
+  "timestamp": 1234567890
+}
+```
+
+**Server Response on Failure:**
+```json
+{
+  "type": "error",
+  "code": "AUTH_FAILED",
+  "message": "Invalid or expired authentication token",
+  "timestamp": 1234567890
+}
+```
+
+### 2. Register as Mobile Producer (after authentication)
+```json
+{
+  "type": "register",
+  "streamId": "my-stream-123",
+  "clientType": "mobile",
+  "produces": ["video-frame"],
+  "consumes": ["alert"]
+}
+```
+
+### 3. Subscribe as Dashboard/ML Consumer (after authentication)
+```json
+{
+  "type": "subscribe",
+  "streamId": "my-stream-123",
+  "clientType": "dashboard",
+  "consumes": ["video-frame", "alert"]
+}
+```
+
+### 4. Send Video Frame (mobile only, after registration)
+```json
+{
+  "type": "video-frame",
+  "streamId": "my-stream-123",
+  "data": "BASE64_ENCODED_VIDEO_FRAME_HERE",
+  "timestamp": 1234567890
+}
+```
+
+### 5. Send Alert (ML service, after subscription)
+```json
+{
+  "type": "alert",
+  "streamId": "my-stream-123",
+  "severity": "high",
+  "message": "Suspicious person detected",
+  "metadata": {
+    "confidence": 0.95,
+    "location": { "x": 120, "y": 350 },
+    "objectType": "person"
+  },
+  "timestamp": 1234567890
+}
+```
+
+## Connection Sequence
+
+### Mobile Client (Producer)
+```
+1. Connect to ws://localhost:3000/streams/register
+2. Send auth message with token
+3. Wait for success response
+4. Send register message
+5. Start sending video frames
+6. Receive alerts from server
+```
+
+### Dashboard Client (Consumer)
+```
+1. Connect to ws://localhost:3000/streams/subscribe
+2. Send auth message with token
+3. Wait for success response
+4. Send subscribe message with streamId
+5. Receive video frames and alerts
+```
+
+## Error Handling
+
+All operations before authentication will be rejected with:
+```json
+{
+  "type": "error",
+  "code": "AUTH_REQUIRED",
+  "message": "Must authenticate first. Send auth message with token."
+}
+```
+
+## Requirements
+
+Implement a client that:
+1. ✅ Connects to the WebSocket endpoint
+2. ✅ Sends authentication message immediately after connection
+3. ✅ Waits for authentication success
+4. ✅ Handles authentication failures gracefully
+5. ✅ Registers or subscribes after successful authentication
+6. ✅ Sends/receives messages based on client type
+7. ✅ Handles disconnections and errors
+8. ✅ Does NOT put tokens in the URL (security issue)
+
+## Security Notes
+
+- **NEVER** include the token in the WebSocket URL
+- **ALWAYS** send the token in the first message after connection
+- Use WSS (secure WebSocket) in production
+- Store tokens securely (not in code)
+
+## Example Session Token
+
+For testing, use: `test_session_token_12345`
+(In production, get this from your Better Auth OAuth flow)
+
+## Testing
+
+You can test your implementation against:
+- Server URL: `ws://localhost:3000/streams/register` (mobile)
+- Server URL: `ws://localhost:3000/streams/subscribe` (dashboard)
+- Health check: `http://localhost:3000/health`
+
+## Language/Framework
+
+Implement this in: [SPECIFY YOUR LANGUAGE/FRAMEWORK HERE]
+- JavaScript/TypeScript (Node.js or Browser)
+- Python
+- React Native (Expo)
+- Or any language with WebSocket support
+
+## Expected Output
+
+Your implementation should:
+1. Successfully connect and authenticate
+2. Log all messages sent and received
+3. Handle errors gracefully
+4. Demonstrate sending/receiving messages based on client type
+5. Include proper error handling and reconnection logic

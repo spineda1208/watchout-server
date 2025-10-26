@@ -11,8 +11,8 @@ export type MessageType = "video-frame" | "alert";
 
 // Client Metadata
 export interface ClientMetadata {
-  userId: string; // Now required - authenticated user ID
-  sessionId: string; // Better Auth session ID
+  userId?: string; // Set after authentication
+  sessionId?: string; // Better Auth session ID - set after authentication
   userEmail?: string; // Optional user email
   userName?: string; // Optional user name
   streamId: string;
@@ -20,6 +20,7 @@ export interface ClientMetadata {
   produces: MessageType[];
   consumes: MessageType[];
   connectedAt: Date;
+  authenticated: boolean; // Track authentication state
 }
 
 // Base Message

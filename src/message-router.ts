@@ -6,10 +6,12 @@ import type {
   SubscribeMessage,
   VideoFrameMessage,
   AlertMessage,
+  AuthMessage,
   ErrorMessage,
   SuccessMessage,
 } from "./types";
 import { connectionManager } from "./connection-manager";
+import { verifySessionToken } from "./auth";
 
 /**
  * Message Router
@@ -27,6 +29,10 @@ export class MessageRouter {
   ): Promise<void> {
     try {
       switch (message.type) {
+        case "auth":
+          await this.handleAuth(ws, message);
+          break;
+
         case "register":
           await this.handleRegister(ws, message);
           break;
@@ -53,6 +59,40 @@ export class MessageRouter {
   }
 
   /**
+   * Handle authentication message - MUST be first message from client
+   */
+  private async handleAuth(
+    ws: ServerWebSocket<ClientMetadata>,
+    message: AuthMessage
+  ): Promise<void> {
+    // Check if already authenticated
+    if (ws.data.authenticated) {
+      this.sendError(ws, "ALREADY_AUTHENTICATED", "Connection already authenticated");
+      return;
+    }
+
+    // Verify the session token
+    const session = await verifySessionToken(message.token);
+    
+    if (!session) {
+      console.log("[Auth] Invalid or expired token");
+      this.sendError(ws, "AUTH_FAILED", "Invalid or expired authentication token");
+      ws.close(1008, "Authentication failed"); // Policy violation close code
+      return;
+    }
+
+    // Update connection metadata with authenticated user info
+    ws.data.userId = session.userId;
+    ws.data.sessionId = session.sessionId;
+    ws.data.userEmail = session.user.email;
+    ws.data.userName = session.user.name;
+    ws.data.authenticated = true;
+
+    console.log(`[Auth] Client authenticated: ${session.user.email || session.userId}`);
+    this.sendSuccess(ws, "Authentication successful");
+  }
+
+  /**
    * Handle registration from a mobile client (producer)
    * Mobile clients connect via /streams/register and then send this message
    */
@@ -60,9 +100,15 @@ export class MessageRouter {
     ws: ServerWebSocket<ClientMetadata>,
     message: RegisterMessage
   ): Promise<void> {
+    // Require authentication before registration
+    if (!ws.data.authenticated) {
+      this.sendError(ws, "AUTH_REQUIRED", "Must authenticate first. Send auth message with token.");
+      return;
+    }
+
     const { streamId, clientType, produces = [], consumes = [] } = message;
 
-    // Get authenticated user info from connection data (set during upgrade)
+    // Get authenticated user info from connection data
     const existingData = ws.data;
     if (!existingData?.userId) {
       this.sendError(ws, "AUTH_REQUIRED", "Connection not authenticated");
@@ -83,6 +129,7 @@ export class MessageRouter {
       produces,
       consumes,
       connectedAt: existingData.connectedAt || new Date(),
+      authenticated: existingData.authenticated,
     };
 
     // Store metadata
@@ -119,9 +166,15 @@ export class MessageRouter {
     ws: ServerWebSocket<ClientMetadata>,
     message: SubscribeMessage
   ): Promise<void> {
+    // Require authentication before subscription
+    if (!ws.data.authenticated) {
+      this.sendError(ws, "AUTH_REQUIRED", "Must authenticate first. Send auth message with token.");
+      return;
+    }
+
     const { streamId, clientType, consumes } = message;
 
-    // Get authenticated user info from connection data (set during upgrade)
+    // Get authenticated user info from connection data
     const existingData = ws.data;
     if (!existingData?.userId) {
       this.sendError(ws, "AUTH_REQUIRED", "Connection not authenticated");
@@ -139,6 +192,7 @@ export class MessageRouter {
       produces: [],
       consumes,
       connectedAt: existingData.connectedAt || new Date(),
+      authenticated: existingData.authenticated,
     };
 
     // Store metadata
@@ -171,6 +225,12 @@ export class MessageRouter {
     ws: ServerWebSocket<ClientMetadata>,
     message: VideoFrameMessage
   ): Promise<void> {
+    // Require authentication
+    if (!ws.data.authenticated) {
+      this.sendError(ws, "AUTH_REQUIRED", "Must authenticate first");
+      return;
+    }
+
     const { streamId } = message;
 
     // Get all video consumers for this stream (web app only)
@@ -245,6 +305,12 @@ export class MessageRouter {
     ws: ServerWebSocket<ClientMetadata>,
     message: AlertMessage
   ): Promise<void> {
+    // Require authentication
+    if (!ws.data.authenticated) {
+      this.sendError(ws, "AUTH_REQUIRED", "Must authenticate first");
+      return;
+    }
+
     const { streamId, severity, message: alertMessage } = message;
 
     // Get all alert consumers for this stream (mobile + web app)
