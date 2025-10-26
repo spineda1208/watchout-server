@@ -21,6 +21,7 @@ const server = Bun.serve<ClientMetadata>({
 
     // WebSocket upgrade endpoint
     if (url.pathname === "/ws") {
+      // @ts-ignore - Bun's upgrade can work with just req in some cases
       const upgraded = server.upgrade(req);
       if (upgraded) {
         return undefined; // Return undefined when upgrade is successful
@@ -102,12 +103,6 @@ const server = Bun.serve<ClientMetadata>({
       await messageRouter.handleDisconnect(ws);
     },
 
-    /**
-     * Called when an error occurs
-     */
-    error(ws, error) {
-      console.error("[WebSocket] Error:", error);
-    },
 
     // Bun WebSocket options
     perMessageDeflate: true, // Enable compression

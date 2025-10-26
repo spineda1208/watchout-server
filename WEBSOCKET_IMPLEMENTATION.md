@@ -352,12 +352,16 @@ All clients received messages correctly and in real-time!
 
 ```
 watchout-server/
-├── index.ts                    # Main WebSocket server
-├── types.ts                    # TypeScript type definitions
-├── connection-manager.ts       # Connection tracking
-├── message-router.ts          # Message routing logic
-├── test-client.ts             # Test client for validation
-├── WS_TODOS.md               # Full implementation roadmap
+├── src/
+│   ├── index.ts              # Main WebSocket server
+│   ├── types.ts              # TypeScript type definitions
+│   ├── connection-manager.ts # Connection tracking
+│   └── message-router.ts     # Message routing logic
+├── tests/
+│   └── test-client.ts        # Test client for validation
+├── package.json              # Project configuration
+├── tsconfig.json             # TypeScript configuration
+├── WS_TODOS.md              # Full implementation roadmap
 └── WEBSOCKET_IMPLEMENTATION.md # This file
 ```
 

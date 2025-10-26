@@ -47,23 +47,31 @@ The server will start on `http://localhost:3000`:
 ### Test the Server
 
 ```bash
+# Run the WebSocket test client
+bun run test:client
+
+# Run unit tests (when available)
 bun test
 ```
 
-This runs a test client that simulates mobile, dashboard, and ML service connections.
+The test client simulates mobile, dashboard, and ML service connections.
 
 ## 📁 Project Structure
 
 ```
 .
-├── index.ts                    # Main WebSocket server
-├── types.ts                    # TypeScript type definitions
-├── connection-manager.ts       # Connection tracking
-├── message-router.ts          # Message routing logic
-├── test-client.ts             # Test client
-├── WS_TODOS.md               # Implementation roadmap
+├── src/
+│   ├── index.ts              # Main WebSocket server
+│   ├── types.ts              # TypeScript type definitions
+│   ├── connection-manager.ts # Connection tracking
+│   └── message-router.ts     # Message routing logic
+├── tests/
+│   └── test-client.ts        # Test client
+├── package.json              # Project configuration
+├── tsconfig.json             # TypeScript configuration
+├── WS_TODOS.md              # Implementation roadmap
 ├── WEBSOCKET_IMPLEMENTATION.md # Detailed documentation
-└── package.json              # Project configuration
+└── README.md                 # This file
 ```
 
 ## 📚 Documentation
