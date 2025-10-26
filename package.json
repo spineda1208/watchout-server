@@ -1,8 +1,16 @@
 {
   "name": "watchout-server",
+  "version": "1.0.0",
+  "description": "WebSocket server for Watchout video streaming and alert system",
   "module": "index.ts",
   "type": "module",
   "private": true,
+  "scripts": {
+    "start": "bun index.ts",
+    "dev": "bun --hot index.ts",
+    "test": "bun test-client.ts",
+    "type-check": "tsc --noEmit"
+  },
   "devDependencies": {
     "@types/bun": "latest"
   },
