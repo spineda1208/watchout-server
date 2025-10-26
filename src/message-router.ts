@@ -10,6 +10,14 @@ import type {
   SuccessMessage,
 } from "./types";
 import { connectionManager } from "./connection-manager";
+import { db } from "./db/client";
+import { videoStream, alert } from "./db/schema";
+import { eq, and } from "drizzle-orm";
+
+// Generate unique ID for alerts
+function generateId(prefix: string): string {
+  return `${prefix}_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`;
+}
 
 /**
  * Message Router
@@ -72,6 +80,61 @@ export class MessageRouter {
       return;
     }
 
+    // Verify stream ownership if this is a mobile client (producer)
+    if (clientType === "mobile" && produces.includes("video-frame")) {
+      try {
+        const stream = await db
+          .select()
+          .from(videoStream)
+          .where(and(
+            eq(videoStream.id, streamId),
+            eq(videoStream.userId, existingData.userId)
+          ))
+          .limit(1);
+
+        if (stream.length === 0) {
+          this.sendError(ws, "UNAUTHORIZED", "Stream not found or you don't own this stream");
+          return;
+        }
+
+        // Update stream status to online
+        await db
+          .update(videoStream)
+          .set({ 
+            status: "online",
+            lastSeen: new Date()
+          })
+          .where(eq(videoStream.id, streamId));
+      } catch (error) {
+        console.error("[MessageRouter] Error verifying stream ownership:", error);
+        this.sendError(ws, "SERVER_ERROR", "Failed to verify stream ownership");
+        return;
+      }
+    }
+
+    // For dashboard/ML subscribing to streams, verify user owns the stream
+    if (clientType !== "ml-service" && consumes.includes("video-frame")) {
+      try {
+        const stream = await db
+          .select()
+          .from(videoStream)
+          .where(and(
+            eq(videoStream.id, streamId),
+            eq(videoStream.userId, existingData.userId)
+          ))
+          .limit(1);
+
+        if (stream.length === 0) {
+          this.sendError(ws, "UNAUTHORIZED", "Stream not found or you don't own this stream");
+          return;
+        }
+      } catch (error) {
+        console.error("[MessageRouter] Error verifying stream access:", error);
+        this.sendError(ws, "SERVER_ERROR", "Failed to verify stream access");
+        return;
+      }
+    }
+
     // Create client metadata, preserving auth info from connection
     const metadata: ClientMetadata = {
       userId: existingData.userId,
@@ -105,9 +168,22 @@ export class MessageRouter {
 
     this.sendSuccess(ws, "Registration successful");
 
-    // Broadcast status update if this is a mobile client starting to stream
+    // Broadcast status update and update DB if this is a mobile client starting to stream
     if (clientType === "mobile" && produces.includes("video-frame")) {
       this.broadcastStatus(streamId, "streaming");
+      
+      // Update stream status to streaming
+      try {
+        await db
+          .update(videoStream)
+          .set({ 
+            status: "streaming",
+            lastSeen: new Date()
+          })
+          .where(eq(videoStream.id, streamId));
+      } catch (error) {
+        console.error("[MessageRouter] Error updating stream status:", error);
+      }
     }
   }
 
@@ -125,6 +201,30 @@ export class MessageRouter {
     if (!existingData?.userId) {
       this.sendError(ws, "AUTH_REQUIRED", "Connection not authenticated");
       return;
+    }
+
+    // For dashboard/mobile subscribing to streams, verify user owns the stream
+    // ML service is allowed to subscribe to any stream for analysis
+    if (clientType !== "ml-service") {
+      try {
+        const stream = await db
+          .select()
+          .from(videoStream)
+          .where(and(
+            eq(videoStream.id, streamId),
+            eq(videoStream.userId, existingData.userId)
+          ))
+          .limit(1);
+
+        if (stream.length === 0) {
+          this.sendError(ws, "UNAUTHORIZED", "Stream not found or you don't own this stream");
+          return;
+        }
+      } catch (error) {
+        console.error("[MessageRouter] Error verifying stream access:", error);
+        this.sendError(ws, "SERVER_ERROR", "Failed to verify stream access");
+        return;
+      }
     }
 
     // Create client metadata, preserving auth info from connection
@@ -158,6 +258,8 @@ export class MessageRouter {
 
   /**
    * Handle video frame from mobile → broadcast to dashboard and ML service
+   * Note: Video frames are broadcasted to ALL subscribers (dashboard, ML service, etc.)
+   * The ML service should maintain a persistent WebSocket connection to ensure it receives all frames.
    */
   private async handleVideoFrame(
     ws: ServerWebSocket<ClientMetadata>,
@@ -169,9 +271,17 @@ export class MessageRouter {
     const consumers = connectionManager.getConsumers(streamId, "video-frame");
 
     if (consumers.length === 0) {
-      console.log(`[MessageRouter] No consumers for video stream ${streamId}`);
+      console.warn(
+        `[MessageRouter] WARNING: No consumers for video stream ${streamId}. ` +
+        `ML service should be connected to analyze footage. Frame will be dropped.`
+      );
       return;
     }
+
+    // Separate consumers by type for logging
+    const dashboardConsumers = consumers.filter(c => c.data?.clientType === "dashboard");
+    const mlConsumers = consumers.filter(c => c.data?.clientType === "ml-service");
+    const mobileConsumers = consumers.filter(c => c.data?.clientType === "mobile");
 
     // Broadcast to all consumers
     const messageStr = JSON.stringify(message);
@@ -187,8 +297,14 @@ export class MessageRouter {
     }
 
     console.log(
-      `[MessageRouter] Broadcast video frame for stream ${streamId} to ${successCount}/${consumers.length} consumers`
+      `[MessageRouter] Broadcast video frame for stream ${streamId} to ${successCount}/${consumers.length} consumers ` +
+      `(dashboard: ${dashboardConsumers.length}, ML: ${mlConsumers.length}, mobile: ${mobileConsumers.length})`
     );
+
+    // Log warning if ML service is not connected
+    if (mlConsumers.length === 0) {
+      console.warn(`[MessageRouter] WARNING: No ML service connected for stream ${streamId}. Footage is not being analyzed.`);
+    }
   }
 
   /**
@@ -198,7 +314,23 @@ export class MessageRouter {
     ws: ServerWebSocket<ClientMetadata>,
     message: AlertMessage
   ): Promise<void> {
-    const { streamId, severity, message: alertMessage } = message;
+    const { streamId, severity, message: alertMessage, metadata } = message;
+
+    // Store alert in database
+    try {
+      const alertId = generateId("alert");
+      await db.insert(alert).values({
+        id: alertId,
+        streamId,
+        severity,
+        message: alertMessage,
+        metadata: metadata || null,
+      });
+      console.log(`[MessageRouter] Stored alert ${alertId} in database`);
+    } catch (error) {
+      console.error(`[MessageRouter] Failed to store alert in database:`, error);
+      // Continue with broadcast even if storage fails
+    }
 
     // Get all alert consumers for this stream
     const consumers = connectionManager.getConsumers(streamId, "alert");
@@ -224,8 +356,6 @@ export class MessageRouter {
     console.log(
       `[MessageRouter] Broadcast ${severity} alert for stream ${streamId} to ${successCount}/${consumers.length} consumers: ${alertMessage}`
     );
-
-    // TODO: Store alert in database
   }
 
   /**
@@ -297,12 +427,24 @@ export class MessageRouter {
         `[MessageRouter] Client disconnected: ${metadata.clientType} from stream ${metadata.streamId}`
       );
 
-      // If mobile producer disconnected, broadcast offline status
+      // If mobile producer disconnected, broadcast offline status and update database
       if (metadata.clientType === "mobile" && metadata.produces.includes("video-frame")) {
         this.broadcastStatus(metadata.streamId, "offline");
+        
+        // Update database with offline status and lastSeen
+        try {
+          await db
+            .update(videoStream)
+            .set({ 
+              status: "offline",
+              lastSeen: new Date()
+            })
+            .where(eq(videoStream.id, metadata.streamId));
+          console.log(`[MessageRouter] Updated stream ${metadata.streamId} status to offline`);
+        } catch (error) {
+          console.error(`[MessageRouter] Failed to update stream status on disconnect:`, error);
+        }
       }
-
-      // TODO: Update database with lastSeen timestamp
     }
   }
 }

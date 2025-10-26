@@ -3,8 +3,16 @@ import type { ClientMetadata, WSMessage } from "./types";
 import { messageRouter } from "./message-router";
 import { connectionManager } from "./connection-manager";
 import { extractTokenFromRequest, verifySessionToken } from "./auth";
+import { db } from "./db/client";
+import { videoStream, alert } from "./db/schema";
+import { eq, and, desc } from "drizzle-orm";
 
 const PORT = process.env.PORT || 3000;
+
+// Generate unique ID for streams and alerts
+function generateId(prefix: string): string {
+  return `${prefix}_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`;
+}
 
 /**
  * WebSocket Server using Bun's native APIs
@@ -79,9 +87,144 @@ const server = Bun.serve<ClientMetadata>({
       return Response.json(stats);
     }
 
+    // POST /streams/register - Register a new video stream
+    if (url.pathname === "/streams/register" && req.method === "POST") {
+      // Extract and verify authentication token
+      const token = extractTokenFromRequest(req);
+      
+      if (!token) {
+        return Response.json({ error: "Authentication required" }, { status: 401 });
+      }
+
+      const session = await verifySessionToken(token);
+      
+      if (!session) {
+        return Response.json({ error: "Invalid or expired authentication token" }, { status: 401 });
+      }
+
+      try {
+        const body = await req.json();
+        const { deviceName, deviceType, metadata } = body;
+
+        if (!deviceName || !deviceType) {
+          return Response.json({ error: "deviceName and deviceType are required" }, { status: 400 });
+        }
+
+        // Generate unique stream ID
+        const streamId = generateId("stream");
+
+        // Insert into database
+        await db.insert(videoStream).values({
+          id: streamId,
+          userId: session.userId,
+          deviceName,
+          deviceType,
+          status: "offline",
+          metadata: metadata || null,
+        });
+
+        console.log(`[REST] Registered new stream ${streamId} for user ${session.userId}`);
+
+        return Response.json({
+          streamId,
+          message: "Stream registered successfully",
+        });
+      } catch (error) {
+        console.error("[REST] Error registering stream:", error);
+        return Response.json({ error: "Failed to register stream" }, { status: 500 });
+      }
+    }
+
+    // GET /streams - List all streams for authenticated user
+    if (url.pathname === "/streams" && req.method === "GET") {
+      // Extract and verify authentication token
+      const token = extractTokenFromRequest(req);
+      
+      if (!token) {
+        return Response.json({ error: "Authentication required" }, { status: 401 });
+      }
+
+      const session = await verifySessionToken(token);
+      
+      if (!session) {
+        return Response.json({ error: "Invalid or expired authentication token" }, { status: 401 });
+      }
+
+      try {
+        // Get all streams for this user
+        const streams = await db
+          .select()
+          .from(videoStream)
+          .where(eq(videoStream.userId, session.userId))
+          .orderBy(desc(videoStream.createdAt));
+
+        console.log(`[REST] Listed ${streams.length} streams for user ${session.userId}`);
+
+        return Response.json({ streams });
+      } catch (error) {
+        console.error("[REST] Error listing streams:", error);
+        return Response.json({ error: "Failed to list streams" }, { status: 500 });
+      }
+    }
+
+    // GET /alerts - Get alert history for a stream
+    if (url.pathname === "/alerts" && req.method === "GET") {
+      // Extract and verify authentication token
+      const token = extractTokenFromRequest(req);
+      
+      if (!token) {
+        return Response.json({ error: "Authentication required" }, { status: 401 });
+      }
+
+      const session = await verifySessionToken(token);
+      
+      if (!session) {
+        return Response.json({ error: "Invalid or expired authentication token" }, { status: 401 });
+      }
+
+      try {
+        const streamId = url.searchParams.get("streamId");
+        const limitStr = url.searchParams.get("limit") || "50";
+        const limit = parseInt(limitStr, 10);
+
+        if (!streamId) {
+          return Response.json({ error: "streamId query parameter is required" }, { status: 400 });
+        }
+
+        // Verify user owns this stream
+        const stream = await db
+          .select()
+          .from(videoStream)
+          .where(and(
+            eq(videoStream.id, streamId),
+            eq(videoStream.userId, session.userId)
+          ))
+          .limit(1);
+
+        if (stream.length === 0) {
+          return Response.json({ error: "Stream not found or unauthorized" }, { status: 404 });
+        }
+
+        // Get alerts for this stream
+        const alerts = await db
+          .select()
+          .from(alert)
+          .where(eq(alert.streamId, streamId))
+          .orderBy(desc(alert.createdAt))
+          .limit(limit);
+
+        console.log(`[REST] Retrieved ${alerts.length} alerts for stream ${streamId}`);
+
+        return Response.json({ alerts });
+      } catch (error) {
+        console.error("[REST] Error retrieving alerts:", error);
+        return Response.json({ error: "Failed to retrieve alerts" }, { status: 500 });
+      }
+    }
+
     // Default response
     return new Response(
-      "Watchout WebSocket Server\n\nEndpoints:\n- /ws - WebSocket endpoint\n- /health - Health check\n- /stats - Connection statistics",
+      "Watchout WebSocket Server\n\nEndpoints:\n- /ws - WebSocket endpoint\n- /health - Health check\n- /stats - Connection statistics\n- POST /streams/register - Register a stream\n- GET /streams - List streams\n- GET /alerts?streamId=xxx - Get alert history",
       {
         headers: { "Content-Type": "text/plain" },
       },
