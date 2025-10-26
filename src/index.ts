@@ -3,6 +3,7 @@ import type { ClientMetadata, WSMessage } from "./types";
 import { messageRouter } from "./message-router";
 import { connectionManager } from "./connection-manager";
 import { extractTokenFromRequest, verifySessionToken } from "./auth";
+import { metricsTracker } from "./metrics";
 
 const PORT = process.env.PORT || 3000;
 
@@ -25,6 +26,14 @@ const server = Bun.serve<ClientMetadata>({
 
     // /streams/register - Mobile client WebSocket connection
     if (url.pathname === "/streams/register") {
+      const clientIp = req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "unknown";
+      const userAgent = req.headers.get("user-agent") || "unknown";
+      
+      console.log(`\n [Connection] New mobile client connecting`);
+      console.log(`    IP: ${clientIp}`);
+      console.log(`   User-Agent: ${userAgent}`);
+      console.log(`    Time: ${new Date().toISOString()}`);
+      
       // Allow unauthenticated connection - auth happens via first message
       const upgraded = server.upgrade(req, {
         data: {
@@ -38,14 +47,23 @@ const server = Bun.serve<ClientMetadata>({
       });
 
       if (upgraded) {
-        console.log("[Register] Mobile client connected - awaiting authentication");
+        console.log(`   [SUCCESS] WebSocket upgraded - awaiting authentication\n`);
         return undefined; // Return undefined when upgrade is successful
       }
+      console.log(`   [ERROR] WebSocket upgrade failed\n`);
       return new Response("WebSocket upgrade failed", { status: 400 });
     }
 
     // /streams/subscribe - Web app subscriber WebSocket connection
     if (url.pathname === "/streams/subscribe") {
+      const clientIp = req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "unknown";
+      const userAgent = req.headers.get("user-agent") || "unknown";
+      
+      console.log(`\n [Connection] New dashboard/subscriber connecting`);
+      console.log(`    IP: ${clientIp}`);
+      console.log(`   User-Agent: ${userAgent}`);
+      console.log(`    Time: ${new Date().toISOString()}`);
+      
       // Allow unauthenticated connection - auth happens via first message
       const upgraded = server.upgrade(req, {
         data: {
@@ -59,26 +77,43 @@ const server = Bun.serve<ClientMetadata>({
       });
 
       if (upgraded) {
-        console.log("[Subscribe] Web app subscriber connected - awaiting authentication");
+        console.log(`   [SUCCESS] WebSocket upgraded - awaiting authentication\n`);
         return undefined;
       }
+      console.log(`   [ERROR] WebSocket upgrade failed\n`);
       return new Response("WebSocket upgrade failed", { status: 400 });
     }
 
     // Health check endpoint
     if (url.pathname === "/health") {
       const stats = connectionManager.getStats();
+      const metrics = Array.from(metricsTracker.getAllMetrics().values());
       return Response.json({
         status: "healthy",
         timestamp: new Date().toISOString(),
         stats,
+        metrics: metrics.map(m => ({
+          streamId: m.streamId,
+          fps: m.fps,
+          totalFrames: m.frameCount,
+          uptime: Math.round((Date.now() - m.startTime) / 1000),
+        })),
       });
     }
 
     // Stats endpoint
     if (url.pathname === "/stats") {
       const stats = connectionManager.getStats();
-      return Response.json(stats);
+      const metrics = Array.from(metricsTracker.getAllMetrics().values());
+      return Response.json({
+        ...stats,
+        streams: metrics.map(m => ({
+          streamId: m.streamId,
+          fps: m.fps,
+          totalFrames: m.frameCount,
+          uptime: Math.round((Date.now() - m.startTime) / 1000),
+        })),
+      });
     }
 
     // Default response
@@ -95,7 +130,8 @@ const server = Bun.serve<ClientMetadata>({
      * Called when a client connects
      */
     open(ws) {
-      console.log(`[WebSocket] Client connected`);
+      const clientType = ws.data.clientType;
+      console.log(` [WebSocket] ${clientType} client WebSocket opened`);
     },
 
     /**
@@ -121,7 +157,12 @@ const server = Bun.serve<ClientMetadata>({
           parsedMessage.timestamp = Date.now();
         }
 
-        console.log(`[WebSocket] Received message type: ${parsedMessage.type}`);
+        // Log message with context
+        const userInfo = ws.data.authenticated 
+          ? `${ws.data.userEmail || ws.data.userId}` 
+          : "unauthenticated";
+        
+        console.log(` [Message] ${parsedMessage.type} from ${ws.data.clientType} (${userInfo})`);
 
         // Route the message
         await messageRouter.routeMessage(ws, parsedMessage);
@@ -142,9 +183,16 @@ const server = Bun.serve<ClientMetadata>({
      * Called when a client disconnects
      */
     async close(ws, code, reason) {
-      console.log(
-        `[WebSocket] Client disconnected (code: ${code}, reason: ${reason})`,
-      );
+      const userInfo = ws.data.authenticated 
+        ? `${ws.data.userEmail || ws.data.userId}` 
+        : "unauthenticated";
+      const duration = Math.round((Date.now() - ws.data.connectedAt.getTime()) / 1000);
+      
+      console.log(`\n [Disconnect] ${ws.data.clientType} client disconnected`);
+      console.log(`    User: ${userInfo}`);
+      console.log(`   Duration: ${duration}s`);
+      console.log(`    Code: ${code}, Reason: ${reason || 'none'}\n`);
+      
       await messageRouter.handleDisconnect(ws);
     },
 
@@ -157,22 +205,22 @@ const server = Bun.serve<ClientMetadata>({
 });
 
 console.log(
-  `🚀 Watchout Stream Router running on port ${PORT}`,
+  ` Watchout Stream Router running on port ${PORT}`,
 );
-console.log(`📱 Mobile clients: ws://localhost:${PORT}/streams/register`);
-console.log(`🖥️  Web app: ws://localhost:${PORT}/streams/subscribe`);
-console.log(`📊 Health check: http://localhost:${PORT}/health`);
-console.log(`📈 Stats: http://localhost:${PORT}/stats`);
+console.log(` Mobile clients: ws://localhost:${PORT}/streams/register`);
+console.log(`Web app: ws://localhost:${PORT}/streams/subscribe`);
+console.log(` Health check: http://localhost:${PORT}/health`);
+console.log(` Stats: http://localhost:${PORT}/stats`);
 
 // Graceful shutdown
 process.on("SIGINT", () => {
-  console.log("\n🛑 Shutting down server...");
+  console.log("\n[Server] Shutting down server...");
   server.stop();
   process.exit(0);
 });
 
 process.on("SIGTERM", () => {
-  console.log("\n🛑 Shutting down server...");
+  console.log("\n[Server] Shutting down server...");
   server.stop();
   process.exit(0);
 });

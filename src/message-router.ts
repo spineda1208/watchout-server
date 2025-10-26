@@ -12,6 +12,7 @@ import type {
 } from "./types";
 import { connectionManager } from "./connection-manager";
 import { verifySessionToken } from "./auth";
+import { metricsTracker } from "./metrics";
 
 /**
  * Message Router
@@ -65,8 +66,13 @@ export class MessageRouter {
     ws: ServerWebSocket<ClientMetadata>,
     message: AuthMessage
   ): Promise<void> {
+    console.log(`\n [Auth] Authentication attempt`);
+    console.log(`    Token preview: ${message.token.substring(0, 20)}...`);
+    console.log(`   🧭 Client type: ${ws.data.clientType}`);
+    
     // Check if already authenticated
     if (ws.data.authenticated) {
+      console.log(`   [WARN]Already authenticated\n`);
       this.sendError(ws, "ALREADY_AUTHENTICATED", "Connection already authenticated");
       return;
     }
@@ -75,7 +81,7 @@ export class MessageRouter {
     const session = await verifySessionToken(message.token);
     
     if (!session) {
-      console.log("[Auth] Invalid or expired token");
+      console.log(`   [FAILED] Authentication FAILED - invalid or expired token\n`);
       this.sendError(ws, "AUTH_FAILED", "Invalid or expired authentication token");
       ws.close(1008, "Authentication failed"); // Policy violation close code
       return;
@@ -88,7 +94,12 @@ export class MessageRouter {
     ws.data.userName = session.user.name;
     ws.data.authenticated = true;
 
-    console.log(`[Auth] Client authenticated: ${session.user.email || session.userId}`);
+    console.log(`   [SUCCESS] Authentication SUCCESS`);
+    console.log(`    User ID: ${session.userId}`);
+    console.log(`    Email: ${session.user.email || 'N/A'}`);
+    console.log(`   📛 Name: ${session.user.name || 'N/A'}`);
+    console.log(`    Session ID: ${session.sessionId}\n`);
+    
     this.sendSuccess(ws, "Authentication successful");
   }
 
@@ -145,10 +156,12 @@ export class MessageRouter {
       connectionManager.registerConsumer(finalStreamId, ws, type);
     }
 
-    console.log(
-      `[MessageRouter] Registered ${clientType} client (user: ${metadata.userEmail || metadata.userId}) for stream ${finalStreamId} ` +
-      `(produces: ${produces.join(", ")}, consumes: ${consumes.join(", ")})`
-    );
+    console.log(`\n [Register] Client registered successfully`);
+    console.log(`    Stream ID: ${finalStreamId}`);
+    console.log(`    Client type: ${clientType}`);
+    console.log(`    User: ${metadata.userEmail || metadata.userId}`);
+    console.log(`    Produces: ${produces.join(", ") || 'none'}`);
+    console.log(`    Consumes: ${consumes.join(", ") || 'none'}\n`);
 
     this.sendSuccess(ws, `Registration successful. Stream ID: ${finalStreamId}`);
 
@@ -203,10 +216,11 @@ export class MessageRouter {
       connectionManager.registerConsumer(streamId, ws, type);
     }
 
-    console.log(
-      `[MessageRouter] ${clientType} (user: ${metadata.userEmail || metadata.userId}) subscribed to stream ${streamId} ` +
-      `(consumes: ${consumes.join(", ")})`
-    );
+    console.log(`\n [Subscribe] Client subscribed successfully`);
+    console.log(`    Stream ID: ${streamId}`);
+    console.log(`    Client type: ${clientType}`);
+    console.log(`    User: ${metadata.userEmail || metadata.userId}`);
+    console.log(`    Consumes: ${consumes.join(", ")}\n`);
 
     this.sendSuccess(ws, "Subscription successful");
   }
@@ -233,6 +247,10 @@ export class MessageRouter {
 
     const { streamId } = message;
 
+    // Track frame for FPS calculation
+    metricsTracker.trackFrame(streamId);
+    const fps = metricsTracker.getFPS(streamId);
+
     // Get all video consumers for this stream (web app only)
     const consumers = connectionManager.getConsumers(streamId, "video-frame");
 
@@ -249,9 +267,11 @@ export class MessageRouter {
       }
     }
 
-    console.log(
-      `[MessageRouter] Broadcast video frame for stream ${streamId} to ${successCount} web app subscriber(s)`
-    );
+    // Log with FPS info (only log every 30 frames to avoid spam)
+    const metrics = metricsTracker.getStreamMetrics(streamId);
+    if (metrics && metrics.frameCount % 30 === 0) {
+      console.log(` [Video] Stream ${streamId} | FPS: ${fps} | Consumers: ${successCount}`);
+    }
 
     // TODO: Forward to ML service (WE initiate, not ML service)
     // The ML service does NOT connect to us - we push frames to it
@@ -334,9 +354,15 @@ export class MessageRouter {
       }
     }
 
-    console.log(
-      `[MessageRouter] Broadcast ${severity} alert for stream ${streamId} to ${successCount} consumer(s): ${alertMessage}`
-    );
+    console.log(`\n [Alert] Alert broadcast`);
+    console.log(`    Stream ID: ${streamId}`);
+    console.log(`   [WARN]Severity: ${severity}`);
+    console.log(`    Message: ${alertMessage}`);
+    console.log(`    Consumers notified: ${successCount}`);
+    if (message.metadata) {
+      console.log(`    Metadata:`, JSON.stringify(message.metadata, null, 2));
+    }
+    console.log();
   }
 
   /**
@@ -404,9 +430,17 @@ export class MessageRouter {
     const metadata = connectionManager.removeConnection(ws);
 
     if (metadata) {
-      console.log(
-        `[MessageRouter] Client disconnected: ${metadata.clientType} from stream ${metadata.streamId}`
-      );
+      // Clean up metrics for this stream
+      if (metadata.produces.includes("video-frame")) {
+        const metrics = metricsTracker.getStreamMetrics(metadata.streamId);
+        if (metrics) {
+          console.log(` [Stats] Final metrics for stream ${metadata.streamId}:`);
+          console.log(`    Total frames: ${metrics.frameCount}`);
+          console.log(`    Final FPS: ${metrics.fps}`);
+          console.log(`   Duration: ${Math.round((Date.now() - metrics.startTime) / 1000)}s`);
+        }
+        metricsTracker.removeStream(metadata.streamId);
+      }
 
       // If mobile producer disconnected, broadcast offline status
       if (metadata.clientType === "mobile" && metadata.produces.includes("video-frame")) {
