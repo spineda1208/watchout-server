@@ -2,12 +2,13 @@ import type { ServerWebSocket } from "bun";
 import type { ClientMetadata, WSMessage } from "./types";
 import { messageRouter } from "./message-router";
 import { connectionManager } from "./connection-manager";
+import { extractTokenFromRequest, verifySessionToken } from "./auth";
 
 const PORT = process.env.PORT || 3000;
 
 /**
  * WebSocket Server using Bun's native APIs
- * 
+ *
  * This server handles:
  * - Video streaming from mobile devices
  * - Video consumption by dashboard and ML services
@@ -15,14 +16,47 @@ const PORT = process.env.PORT || 3000;
  */
 const server = Bun.serve<ClientMetadata>({
   port: PORT,
-  
+
   async fetch(req, server) {
     const url = new URL(req.url);
 
     // WebSocket upgrade endpoint
     if (url.pathname === "/ws") {
+      // Extract and verify authentication token
+      const token = extractTokenFromRequest(req);
+      
+      if (!token) {
+        console.log("[WebSocket] Connection rejected: No authentication token");
+        return new Response("Authentication required", { status: 401 });
+      }
+
+      // Verify the session
+      const session = await verifySessionToken(token);
+      
+      if (!session) {
+        console.log("[WebSocket] Connection rejected: Invalid or expired token");
+        return new Response("Invalid or expired authentication token", { status: 401 });
+      }
+
+      console.log(`[WebSocket] Authenticated connection for user: ${session.user.email || session.userId}`);
+
+      // Store session info in data to be used in the websocket handlers
       // @ts-ignore - Bun's upgrade can work with just req in some cases
-      const upgraded = server.upgrade(req);
+      const upgraded = server.upgrade(req, {
+        data: {
+          userId: session.userId,
+          sessionId: session.sessionId,
+          userEmail: session.user.email,
+          userName: session.user.name,
+          // These will be set during registration/subscription
+          streamId: "",
+          clientType: "mobile" as const,
+          produces: [],
+          consumes: [],
+          connectedAt: new Date(),
+        } as ClientMetadata,
+      });
+
       if (upgraded) {
         return undefined; // Return undefined when upgrade is successful
       }
@@ -46,9 +80,12 @@ const server = Bun.serve<ClientMetadata>({
     }
 
     // Default response
-    return new Response("Watchout WebSocket Server\n\nEndpoints:\n- /ws - WebSocket endpoint\n- /health - Health check\n- /stats - Connection statistics", {
-      headers: { "Content-Type": "text/plain" },
-    });
+    return new Response(
+      "Watchout WebSocket Server\n\nEndpoints:\n- /ws - WebSocket endpoint\n- /health - Health check\n- /stats - Connection statistics",
+      {
+        headers: { "Content-Type": "text/plain" },
+      },
+    );
   },
 
   websocket: {
@@ -66,12 +103,14 @@ const server = Bun.serve<ClientMetadata>({
       try {
         // Parse message
         let parsedMessage: WSMessage;
-        
+
         if (typeof message === "string") {
           parsedMessage = JSON.parse(message);
         } else {
           // Handle binary messages (for future use with binary video frames)
-          console.log("[WebSocket] Received binary message (not yet supported)");
+          console.log(
+            "[WebSocket] Received binary message (not yet supported)",
+          );
           return;
         }
 
@@ -86,12 +125,14 @@ const server = Bun.serve<ClientMetadata>({
         await messageRouter.routeMessage(ws, parsedMessage);
       } catch (error) {
         console.error("[WebSocket] Error processing message:", error);
-        ws.send(JSON.stringify({
-          type: "error",
-          code: "INVALID_MESSAGE",
-          message: "Failed to process message",
-          timestamp: Date.now(),
-        }));
+        ws.send(
+          JSON.stringify({
+            type: "error",
+            code: "INVALID_MESSAGE",
+            message: "Failed to process message",
+            timestamp: Date.now(),
+          }),
+        );
       }
     },
 
@@ -99,10 +140,11 @@ const server = Bun.serve<ClientMetadata>({
      * Called when a client disconnects
      */
     async close(ws, code, reason) {
-      console.log(`[WebSocket] Client disconnected (code: ${code}, reason: ${reason})`);
+      console.log(
+        `[WebSocket] Client disconnected (code: ${code}, reason: ${reason})`,
+      );
       await messageRouter.handleDisconnect(ws);
     },
-
 
     // Bun WebSocket options
     perMessageDeflate: true, // Enable compression
@@ -112,7 +154,9 @@ const server = Bun.serve<ClientMetadata>({
   },
 });
 
-console.log(`🚀 Watchout WebSocket Server running on ws://localhost:${PORT}/ws`);
+console.log(
+  `🚀 Watchout WebSocket Server running on ws://localhost:${PORT}/ws`,
+);
 console.log(`📊 Health check: http://localhost:${PORT}/health`);
 console.log(`📈 Stats: http://localhost:${PORT}/stats`);
 

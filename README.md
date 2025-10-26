@@ -13,23 +13,37 @@ This is a **bidirectional pub-sub relay system** that connects:
 
 ✅ Real-time video streaming (mobile → dashboard/ML)  
 ✅ Alert broadcasting (ML → mobile/dashboard)  
+✅ **Better Auth integration** - Secure authentication  
 ✅ Connection management and tracking  
 ✅ Status updates (online, offline, streaming)  
 ✅ Health check and statistics endpoints  
 ✅ Type-safe with TypeScript  
-✅ Zero external dependencies (uses Bun's native WebSocket)  
+✅ Minimal dependencies (uses Bun's native WebSocket)  
 ✅ Built-in message compression  
 ✅ Supports up to 16MB payloads  
 
 ## 🚀 Quick Start
 
-### Install Dependencies
+### 1. Install Dependencies
 
 ```bash
 bun install
 ```
 
-### Run the Server
+### 2. Configure Environment
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` and set your database URL (must match your Next.js app):
+
+```env
+DATABASE_URL=postgresql://user:password@localhost:5432/watchout
+PORT=3000
+```
+
+### 3. Run the Server
 
 ```bash
 # Production
@@ -76,6 +90,7 @@ The test client simulates mobile, dashboard, and ML service connections.
 
 ## 📚 Documentation
 
+- **[AUTHENTICATION.md](./AUTHENTICATION.md)** - 🔐 Better Auth integration guide
 - **[WEBSOCKET_IMPLEMENTATION.md](./WEBSOCKET_IMPLEMENTATION.md)** - Complete implementation details and usage examples
 - **[WS_TODOS.md](./WS_TODOS.md)** - Full feature roadmap and next steps
 - **[AGENTS.md](./AGENTS.md)** - Agent collaboration notes
@@ -85,7 +100,9 @@ The test client simulates mobile, dashboard, and ML service connections.
 ### Mobile Client (Producer)
 
 ```typescript
-const ws = new WebSocket("ws://localhost:3000/ws");
+// Connect with authentication token
+const token = "your-better-auth-session-token";
+const ws = new WebSocket(`ws://localhost:3000/ws?token=${token}`);
 
 ws.onopen = () => {
   ws.send(JSON.stringify({
@@ -109,7 +126,9 @@ ws.send(JSON.stringify({
 ### Dashboard (Consumer)
 
 ```typescript
-const ws = new WebSocket("ws://localhost:3000/ws");
+// Connect with authentication token
+const token = "your-better-auth-session-token";
+const ws = new WebSocket(`ws://localhost:3000/ws?token=${token}`);
 
 ws.onopen = () => {
   ws.send(JSON.stringify({
@@ -133,15 +152,17 @@ ws.onmessage = (event) => {
 ## 🛠️ Built With
 
 - **[Bun](https://bun.sh)** - Fast all-in-one JavaScript runtime
+- **[Better Auth](https://better-auth.com)** - Modern authentication
 - **TypeScript** - Type safety
-- **Native WebSocket** - No external dependencies!
+- **Native WebSocket** - Minimal dependencies!
 
 ## 📊 Status
 
 ✅ **Core WebSocket Infrastructure** - Complete  
+✅ **Authentication** - Complete (Better Auth integration)  
+✅ **Database Integration** - Complete (shared with Next.js)  
 🚧 **REST API Endpoints** - Next priority  
-🚧 **Authentication** - Planned  
-🚧 **Database Integration** - Planned  
+🚧 **Authorization** - Planned (stream access control)  
 
 See [WS_TODOS.md](./WS_TODOS.md) for the complete roadmap.
 

@@ -1,29 +1,51 @@
 /**
- * Test WebSocket Client
+ * Test WebSocket Client with Better Auth Integration
  * 
- * This script demonstrates how to connect to the WebSocket server and test different client types:
+ * This script demonstrates how to connect to the WebSocket server with authentication
+ * and test different client types:
  * - Mobile producer (sends video frames)
  * - Dashboard consumer (receives video frames and alerts)
  * - ML service (receives video frames, sends alerts)
+ * 
+ * IMPORTANT: You need a valid Better Auth session token to connect.
+ * 
+ * Set the SESSION_TOKEN environment variable:
+ * export SESSION_TOKEN="your-session-token-here"
+ * 
+ * Or modify the TEST_TOKEN constant below.
  */
+
+// Get session token from environment or use a test token
+const SESSION_TOKEN = process.env.SESSION_TOKEN || "";
+
+if (!SESSION_TOKEN) {
+  console.error("❌ ERROR: No session token provided!");
+  console.error("Please set SESSION_TOKEN environment variable:");
+  console.error("  export SESSION_TOKEN=\"your-token-here\"");
+  console.error("  bun tests/test-client.ts");
+  console.error("\nTo get a session token:");
+  console.error("  1. Log in to your Next.js app");
+  console.error("  2. Check cookies for 'better-auth.session_token'");
+  console.error("  3. Or use your auth API to get the token");
+  process.exit(1);
+}
 
 // Test Mobile Client (Producer)
 async function testMobileClient(streamId: string) {
   console.log("\n🤳 Testing Mobile Client (Video Producer)...");
   
-  const ws = new WebSocket("ws://localhost:3000/ws");
+  const ws = new WebSocket(`ws://localhost:3000/ws?token=${SESSION_TOKEN}`);
 
   ws.onopen = () => {
     console.log("✅ Mobile client connected");
 
-    // Register as mobile producer
+    // Register as mobile producer (no need to send userId - it's from auth)
     ws.send(JSON.stringify({
       type: "register",
       clientType: "mobile",
       streamId: streamId,
       produces: ["video-frame"],
       consumes: ["alert"],
-      userId: "user123",
     }));
 
     // Simulate sending video frames
@@ -67,18 +89,17 @@ async function testMobileClient(streamId: string) {
 async function testDashboardClient(streamId: string) {
   console.log("\n🖥️  Testing Dashboard Client (Video & Alert Consumer)...");
   
-  const ws = new WebSocket("ws://localhost:3000/ws");
+  const ws = new WebSocket(`ws://localhost:3000/ws?token=${SESSION_TOKEN}`);
 
   ws.onopen = () => {
     console.log("✅ Dashboard client connected");
 
-    // Subscribe to video frames and alerts
+    // Subscribe to video frames and alerts (no need to send userId - it's from auth)
     ws.send(JSON.stringify({
       type: "subscribe",
       clientType: "dashboard",
       streamId: streamId,
       consumes: ["video-frame", "alert"],
-      userId: "user123",
     }));
   };
 
@@ -109,7 +130,7 @@ async function testDashboardClient(streamId: string) {
 async function testMLServiceClient(streamId: string) {
   console.log("\n🤖 Testing ML Service Client (Video Consumer & Alert Producer)...");
   
-  const ws = new WebSocket("ws://localhost:3000/ws");
+  const ws = new WebSocket(`ws://localhost:3000/ws?token=${SESSION_TOKEN}`);
 
   ws.onopen = () => {
     console.log("✅ ML Service client connected");

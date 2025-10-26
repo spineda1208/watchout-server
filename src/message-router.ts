@@ -63,16 +63,26 @@ export class MessageRouter {
     ws: ServerWebSocket<ClientMetadata>,
     message: RegisterMessage
   ): Promise<void> {
-    const { streamId, clientType, produces = [], consumes = [], userId } = message;
+    const { streamId, clientType, produces = [], consumes = [] } = message;
 
-    // Create client metadata
+    // Get authenticated user info from connection data (set during upgrade)
+    const existingData = ws.data;
+    if (!existingData?.userId) {
+      this.sendError(ws, "AUTH_REQUIRED", "Connection not authenticated");
+      return;
+    }
+
+    // Create client metadata, preserving auth info from connection
     const metadata: ClientMetadata = {
-      userId,
+      userId: existingData.userId,
+      sessionId: existingData.sessionId,
+      userEmail: existingData.userEmail,
+      userName: existingData.userName,
       streamId,
       clientType,
       produces,
       consumes,
-      connectedAt: new Date(),
+      connectedAt: existingData.connectedAt || new Date(),
     };
 
     // Store metadata
@@ -89,7 +99,7 @@ export class MessageRouter {
     }
 
     console.log(
-      `[MessageRouter] Registered ${clientType} client for stream ${streamId} ` +
+      `[MessageRouter] Registered ${clientType} client (user: ${metadata.userEmail || metadata.userId}) for stream ${streamId} ` +
       `(produces: ${produces.join(", ")}, consumes: ${consumes.join(", ")})`
     );
 
@@ -108,16 +118,26 @@ export class MessageRouter {
     ws: ServerWebSocket<ClientMetadata>,
     message: SubscribeMessage
   ): Promise<void> {
-    const { streamId, clientType, consumes, userId } = message;
+    const { streamId, clientType, consumes } = message;
 
-    // Create client metadata
+    // Get authenticated user info from connection data (set during upgrade)
+    const existingData = ws.data;
+    if (!existingData?.userId) {
+      this.sendError(ws, "AUTH_REQUIRED", "Connection not authenticated");
+      return;
+    }
+
+    // Create client metadata, preserving auth info from connection
     const metadata: ClientMetadata = {
-      userId,
+      userId: existingData.userId,
+      sessionId: existingData.sessionId,
+      userEmail: existingData.userEmail,
+      userName: existingData.userName,
       streamId,
       clientType,
       produces: [],
       consumes,
-      connectedAt: new Date(),
+      connectedAt: existingData.connectedAt || new Date(),
     };
 
     // Store metadata
@@ -129,7 +149,7 @@ export class MessageRouter {
     }
 
     console.log(
-      `[MessageRouter] ${clientType} subscribed to stream ${streamId} ` +
+      `[MessageRouter] ${clientType} (user: ${metadata.userEmail || metadata.userId}) subscribed to stream ${streamId} ` +
       `(consumes: ${consumes.join(", ")})`
     );
 

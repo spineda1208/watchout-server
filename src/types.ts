@@ -10,7 +10,10 @@ export type MessageType = "video-frame" | "alert";
 
 // Client Metadata
 export interface ClientMetadata {
-  userId?: string;
+  userId: string; // Now required - authenticated user ID
+  sessionId: string; // Better Auth session ID
+  userEmail?: string; // Optional user email
+  userName?: string; // Optional user name
   streamId: string;
   clientType: ClientType;
   produces: MessageType[];
@@ -31,8 +34,8 @@ export interface RegisterMessage extends BaseMessage {
   streamId: string;
   produces?: MessageType[];
   consumes?: MessageType[];
-  userId?: string;
-  token?: string;
+  // Note: userId and token are no longer needed in messages
+  // Authentication is handled during WebSocket upgrade
 }
 
 // Client Subscribe Message (for consumers)
@@ -41,8 +44,8 @@ export interface SubscribeMessage extends BaseMessage {
   clientType: ClientType;
   streamId: string;
   consumes: MessageType[];
-  userId?: string;
-  token?: string;
+  // Note: userId and token are no longer needed in messages
+  // Authentication is handled during WebSocket upgrade
 }
 
 // Video Frame Message (from Mobile to Dashboard/ML)
