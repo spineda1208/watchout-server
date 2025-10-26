@@ -4,28 +4,11 @@
 
 High-performance WebSocket server for real-time video streaming and alert broadcasting, built with [Bun](https://bun.sh)'s native APIs.
 
-## 🎯 What is This?
+## Dependencies
 
-This is a **bidirectional pub-sub relay system** that connects:
+- **bun** >= 1.3.1
 
-- 📱 **Mobile clients** - Stream video and receive alerts
-- 🖥️ **Dashboard** - View video streams and receive alerts
-- 🤖 **ML services** - Analyze video and send alerts
-
-## ✨ Features
-
-✅ Real-time video streaming (mobile → dashboard/ML)
-✅ Alert broadcasting (ML → mobile/dashboard)
-✅ **Better Auth integration** - Secure authentication
-✅ Connection management and tracking
-✅ Status updates (online, offline, streaming)
-✅ Health check and statistics endpoints
-✅ Type-safe with TypeScript
-✅ Minimal dependencies (uses Bun's native WebSocket)
-✅ Built-in message compression
-✅ Supports up to 16MB payloads
-
-## 🚀 Quick Start
+## Getting Started
 
 ### 1. Install Dependencies
 
@@ -58,154 +41,82 @@ bun dev
 
 The server will start on `http://localhost:3000`:
 
-- WebSocket: `ws://localhost:3000/ws`
-- Health: `http://localhost:3000/health`
+- Mobile clients: `ws://localhost:3000/streams/register`
+- Web app: `ws://localhost:3000/streams/subscribe`
+- Health check: `http://localhost:3000/health`
 - Stats: `http://localhost:3000/stats`
 
-### Test the Server
+## Architecture
 
-```bash
-# Run the WebSocket test client
-bun run test:client
-
-# Run unit tests (when available)
-bun test
-```
-
-The test client simulates mobile, dashboard, and ML service connections.
-
-## 📁 Project Structure
+This is a **pure stream router** that manages WebSocket connections in memory and routes video/alert data between clients.
 
 ```
-.
-├── src/
-│   ├── index.ts              # Main WebSocket server
-│   ├── types.ts              # TypeScript type definitions
-│   ├── connection-manager.ts # Connection tracking
-│   └── message-router.ts     # Message routing logic
-├── tests/
-│   └── test-client.ts        # Test client
-├── package.json              # Project configuration
-├── tsconfig.json             # TypeScript configuration
-├── WS_TODOS.md              # Implementation roadmap
-├── WEBSOCKET_IMPLEMENTATION.md # Detailed documentation
-└── README.md                 # This file
+Mobile Client              Web App
+     ↓                        ↓
+/streams/register      /streams/subscribe
+     ↓                        ↓
+     └────────────────────────┘
+                 ↓
+      Stream Router (in-memory)
+                 ↓
+      ┌──────────┼──────────┬──────────────┐
+      ↓          ↓          ↓              ↓
+  Mobile     Web App    ML Service    ML Service
+  (alerts)   (video/    (WE push      (pushes alerts
+             alerts)    frames TO it)  back TO us)
 ```
 
-## 📚 Documentation
+### How It Works
 
-### Start Here
+**Key Points:**
 
-- **[QUICK_START.md](./QUICK_START.md)** - ⚡ Quick start guide and TL;DR
-- **[SETUP.md](./SETUP.md)** - 🔧 Complete setup and configuration
+- All stream state is kept **in memory only** (no database persistence)
+- Authentication via Better Auth (session verification only)
+- Separate WebSocket endpoints for mobile and web app
+- ML service does NOT connect to us - we push frames TO it
+- Alerts from ML service are broadcast to mobile + web app in real-time
 
-### Authentication
+**Video Streaming Flow:**
 
-- **[AUTHENTICATION.md](./AUTHENTICATION.md)** - 🔐 Better Auth integration details
-- **[MOBILE_AUTH_SETUP.md](./MOBILE_AUTH_SETUP.md)** - 📱 Mobile client authentication guide
+1. Mobile connects to `/streams/register`
+2. Mobile sends "register" message
+3. Server responds with success + streamId
+4. Mobile starts sending "video-frame" messages
+5. Server broadcasts frames to:
+   - All WebSocket subscribers (web app at `/streams/subscribe`)
+   - TODO: ML service (WE push TO ML service via HTTP/WebSocket/Queue)
+6. Web app receives frames in real-time
 
-### Implementation
+**Alert Flow (Future):**
 
-- **[WEBSOCKET_IMPLEMENTATION.md](./WEBSOCKET_IMPLEMENTATION.md)** - Complete implementation details and usage examples
-- **[WS_TODOS.md](./WS_TODOS.md)** - Full feature roadmap and next steps
-- **[AGENTS.md](./AGENTS.md)** - Agent collaboration notes
+1. WE push video frames TO ML service (initiated by us)
+2. ML service analyzes and detects anomaly
+3. ML service sends alert back TO US (via HTTP POST or WebSocket we initiated)
+4. Server broadcasts alert to:
+   - Mobile client (via `/streams/register` connection)
+   - Web app (via `/streams/subscribe` connection)
+5. Alert persistence handled by separate service
 
-## 🔌 Quick Example
+## Documentation
 
-### Mobile Client (Producer)
+For complete API documentation, message types, and integration examples, see:
 
-```typescript
-// Connect with authentication token
-const token = "your-better-auth-session-token";
-const ws = new WebSocket(`ws://localhost:3000/ws?token=${token}`);
+- **[STREAM_ROUTER_API.md](./STREAM_ROUTER_API.md)** - Complete API reference and integration guide
 
-ws.onopen = () => {
-  ws.send(
-    JSON.stringify({
-      type: "register",
-      clientType: "mobile",
-      streamId: "my-stream",
-      produces: ["video-frame"],
-      consumes: ["alert"],
-    }),
-  );
-};
-
-// Send video frame
-ws.send(
-  JSON.stringify({
-    type: "video-frame",
-    streamId: "my-stream",
-    data: "base64_encoded_frame",
-    timestamp: Date.now(),
-  }),
-);
-```
-
-### Dashboard (Consumer)
-
-```typescript
-// Connect with authentication token
-const token = "your-better-auth-session-token";
-const ws = new WebSocket(`ws://localhost:3000/ws?token=${token}`);
-
-ws.onopen = () => {
-  ws.send(
-    JSON.stringify({
-      type: "subscribe",
-      clientType: "dashboard",
-      streamId: "my-stream",
-      consumes: ["video-frame", "alert"],
-    }),
-  );
-};
-
-ws.onmessage = (event) => {
-  const msg = JSON.parse(event.data);
-  if (msg.type === "video-frame") {
-    // Display video
-  } else if (msg.type === "alert") {
-    // Show alert
-  }
-};
-```
-
-## 🛠️ Built With
+## Built With
 
 - **[Bun](https://bun.sh)** - Fast all-in-one JavaScript runtime
 - **[Better Auth](https://better-auth.com)** - Modern authentication
 - **TypeScript** - Type safety
-- **Native WebSocket** - Minimal dependencies!
+- **Native WebSocket** - Minimal dependencies
 
-## 📊 Status
-
-✅ **Core WebSocket Infrastructure** - Complete
-✅ **Authentication** - Complete (Better Auth integration)
-✅ **Database Integration** - Complete (shared with Next.js)
-🚧 **REST API Endpoints** - Next priority
-🚧 **Authorization** - Planned (stream access control)
-
-See [WS_TODOS.md](./WS_TODOS.md) for the complete roadmap.
-
-## 📈 Performance
+## Performance
 
 - Native Bun WebSocket (written in Zig)
 - Built-in compression
 - Concurrent connections limited only by system resources
 - 16MB max payload size
 - 2-minute idle timeout
-
-## 🧪 Test Results
-
-✅ All tests passing
-✅ Video streaming working
-✅ Alert broadcasting working
-✅ Connection management working
-✅ Status updates working
-
-## 📄 License
-
-Private project
 
 ---
 
