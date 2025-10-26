@@ -20,6 +20,7 @@ const PORT = process.env.PORT || 3000;
  */
 const server = Bun.serve<ClientMetadata>({
   port: PORT,
+  hostname: "0.0.0.0", // Listen on all network interfaces (allows connections from other devices)
 
   async fetch(req, server) {
     const url = new URL(req.url);
@@ -204,13 +205,35 @@ const server = Bun.serve<ClientMetadata>({
   },
 });
 
-console.log(
-  ` Watchout Stream Router running on port ${PORT}`,
-);
-console.log(` Mobile clients: ws://localhost:${PORT}/streams/register`);
-console.log(`Web app: ws://localhost:${PORT}/streams/subscribe`);
-console.log(` Health check: http://localhost:${PORT}/health`);
-console.log(` Stats: http://localhost:${PORT}/stats`);
+// Get local network IP
+const getLocalIP = () => {
+  const { networkInterfaces } = require("os");
+  const nets = networkInterfaces();
+  for (const name of Object.keys(nets)) {
+    for (const net of nets[name]) {
+      // Skip internal (i.e. 127.0.0.1) and non-IPv4 addresses
+      if (net.family === "IPv4" && !net.internal) {
+        return net.address;
+      }
+    }
+  }
+  return "localhost";
+};
+
+const localIP = getLocalIP();
+
+console.log(`\n🚀 Watchout Stream Router running on port ${PORT}`);
+console.log(`\n📱 Mobile clients (use this in your Expo app):`);
+console.log(`   ws://${localIP}:${PORT}/streams/register`);
+console.log(`\n💻 Web app:`);
+console.log(`   ws://${localIP}:${PORT}/streams/subscribe`);
+console.log(`   ws://localhost:${PORT}/streams/subscribe (local only)`);
+console.log(`\n🏥 Health check:`);
+console.log(`   http://${localIP}:${PORT}/health`);
+console.log(`   http://localhost:${PORT}/health (local only)`);
+console.log(`\n📊 Stats:`);
+console.log(`   http://${localIP}:${PORT}/stats`);
+console.log(`   http://localhost:${PORT}/stats (local only)\n`);
 
 // Graceful shutdown
 process.on("SIGINT", () => {

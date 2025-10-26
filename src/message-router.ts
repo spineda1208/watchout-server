@@ -77,7 +77,7 @@ export class MessageRouter {
       return;
     }
 
-    // Verify the session token
+    // Verify Better Auth session token directly (DB-backed)
     const session = await verifySessionToken(message.token);
     
     if (!session) {
